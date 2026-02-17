@@ -4,9 +4,12 @@
   const MAX_USERNAME = 32;
   const MAX_BODY = 1000;
   const PAGE_SIZE = 50;
+  const SUPABASE_URL = 'https://tbabuxbjwtetngdggjmy.supabase.co';
+  const SUPABASE_ANON_KEY = 'sb_publishable_T3cT3ZWzvyNPwVPPKb6h0A_Bp06IK06';
 
   let currentListingKey = null;
   let widget = null;
+  let commentSort = 'recent';
 
   function getLastPathSegment(pathname) {
     const cleanPath = pathname.replace(/\/+$/, '');
@@ -72,7 +75,18 @@
     container.id = WIDGET_ID;
     container.className = 'centris-comments';
 
-    const header = createTextElement('h2', 'centris-comments__title', 'Comments');
+    const header = document.createElement('div');
+    header.className = 'centris-comments__header';
+
+    const title = createTextElement('h2', 'centris-comments__title', 'Comments');
+    const sortButton = document.createElement('button');
+    sortButton.type = 'button';
+    sortButton.className = 'centris-comments__sort';
+    sortButton.setAttribute('aria-label', 'Sort by most recent');
+    sortButton.title = 'Sort by most recent';
+    sortButton.dataset.state = 'recent';
+    const sortLabel = createTextElement('span', 'centris-comments__sr-only', 'Sort: Recent');
+    sortButton.append(sortLabel);
     const status = createTextElement('p', 'centris-comments__status', 'Loading...');
     const list = document.createElement('div');
     list.className = 'centris-comments__list';
@@ -103,10 +117,12 @@
     submitButton.textContent = 'Post';
 
     form.append(usernameLabel, usernameInput, commentLabel, commentInput, submitButton);
+    header.append(title, sortButton);
     container.append(header, status, list, form);
 
     return {
       container,
+      sortButton,
       status,
       list,
       form,
@@ -118,6 +134,7 @@
 
   function findInsertionPoint() {
     const candidates = [
+      document.getElementById('maindiv'),
       document.querySelector('main'),
       document.querySelector('[role="main"]'),
       document.querySelector('.property-details, .property-details-container')
@@ -139,17 +156,16 @@
   }
 
   async function getSupabaseConfig() {
-    const config = await storageGet(['supabaseUrl', 'supabaseAnonKey']);
     return {
-      supabaseUrl: config.supabaseUrl || '',
-      supabaseAnonKey: config.supabaseAnonKey || ''
+      supabaseUrl: SUPABASE_URL,
+      supabaseAnonKey: SUPABASE_ANON_KEY
     };
   }
 
-  async function fetchComments(listingKey) {
+  async function fetchComments(listingKey, sortOrder) {
     const { supabaseUrl, supabaseAnonKey } = await getSupabaseConfig();
     if (!supabaseUrl || !supabaseAnonKey) {
-      throw new Error('Missing Supabase config. Set it in extension options.');
+      throw new Error('Missing Supabase config. Update SUPABASE_URL and SUPABASE_ANON_KEY in contentScript.js.');
     }
 
     const endpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/comments`;
@@ -157,7 +173,7 @@
       select: 'id,username,body,created_at',
       listing_key: `eq.${listingKey}`,
       is_deleted: 'eq.false',
-      order: 'created_at.desc',
+      order: `created_at.${sortOrder}`,
       limit: String(PAGE_SIZE)
     });
 
@@ -176,7 +192,85 @@
     return response.json();
   }
 
-  function renderComments(comments) {
+  async function fetchReplies(listingKey) {
+    const { supabaseUrl, supabaseAnonKey } = await getSupabaseConfig();
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error('Missing Supabase config. Update SUPABASE_URL and SUPABASE_ANON_KEY in contentScript.js.');
+    }
+
+    const endpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/comment_replies`;
+    const params = new URLSearchParams({
+      select: 'id,comment_id,username,body,created_at',
+      listing_key: `eq.${listingKey}`,
+      is_deleted: 'eq.false',
+      order: 'created_at.asc',
+      limit: String(PAGE_SIZE)
+    });
+
+    const response = await fetch(`${endpoint}?${params.toString()}`, {
+      headers: {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${supabaseAnonKey}`
+      }
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed to load replies (${response.status}): ${text}`);
+    }
+
+    return response.json();
+  }
+
+  function renderReplies(container, replies) {
+    if (!replies.length) {
+      return;
+    }
+
+    const list = document.createElement('div');
+    list.className = 'centris-comments__replies';
+
+    replies.forEach((reply) => {
+      const item = document.createElement('article');
+      item.className = 'centris-comments__reply';
+
+      const username = createTextElement('p', 'centris-comments__meta', reply.username || 'Anonymous');
+      const timestamp = createTextElement('time', 'centris-comments__time', formatDate(reply.created_at));
+      const body = createTextElement('p', 'centris-comments__body', reply.body);
+
+      item.append(username, timestamp, body);
+      list.append(item);
+    });
+
+    container.append(list);
+  }
+
+  function buildReplyForm(commentId) {
+    const form = document.createElement('form');
+    form.className = 'centris-comments__reply-form';
+    form.dataset.commentId = commentId;
+
+    const usernameInput = document.createElement('input');
+    usernameInput.type = 'text';
+    usernameInput.name = 'username';
+    usernameInput.maxLength = MAX_USERNAME;
+    usernameInput.placeholder = 'Anonymous';
+
+    const replyInput = document.createElement('textarea');
+    replyInput.name = 'body';
+    replyInput.maxLength = MAX_BODY;
+    replyInput.required = true;
+    replyInput.rows = 3;
+
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.textContent = 'Post reply';
+
+    form.append(usernameInput, replyInput, button);
+    return form;
+  }
+
+  function renderComments(comments, replies) {
     widget.list.textContent = '';
 
     if (!comments.length) {
@@ -184,15 +278,39 @@
       return;
     }
 
+    const repliesByComment = new Map();
+    replies.forEach((reply) => {
+      if (!repliesByComment.has(reply.comment_id)) {
+        repliesByComment.set(reply.comment_id, []);
+      }
+      repliesByComment.get(reply.comment_id).push(reply);
+    });
+
     comments.forEach((comment) => {
       const item = document.createElement('article');
       item.className = 'centris-comments__item';
+      item.dataset.commentId = comment.id;
 
       const username = createTextElement('p', 'centris-comments__meta', comment.username || 'Anonymous');
       const timestamp = createTextElement('time', 'centris-comments__time', formatDate(comment.created_at));
       const body = createTextElement('p', 'centris-comments__body', comment.body);
 
-      item.append(username, timestamp, body);
+      const actions = document.createElement('div');
+      actions.className = 'centris-comments__actions';
+
+      const replyToggle = document.createElement('button');
+      replyToggle.type = 'button';
+      replyToggle.className = 'centris-comments__reply-toggle';
+      replyToggle.textContent = 'Reply';
+
+      const replyForm = buildReplyForm(comment.id);
+      replyForm.hidden = true;
+
+      actions.append(replyToggle);
+
+      item.append(username, timestamp, body, actions);
+      renderReplies(item, repliesByComment.get(comment.id) || []);
+      item.append(replyForm);
       widget.list.append(item);
     });
   }
@@ -201,8 +319,12 @@
     widget.status.textContent = 'Loading...';
 
     try {
-      const comments = await fetchComments(listingKey);
-      renderComments(comments);
+      const sortOrder = commentSort === 'recent' ? 'desc' : 'asc';
+      const [comments, replies] = await Promise.all([
+        fetchComments(listingKey, sortOrder),
+        fetchReplies(listingKey)
+      ]);
+      renderComments(comments, replies);
       widget.status.textContent = '';
     } catch (error) {
       widget.status.textContent = error.message || 'Error loading comments.';
@@ -213,7 +335,7 @@
   async function postComment(listingKey, username, body) {
     const { supabaseUrl, supabaseAnonKey } = await getSupabaseConfig();
     if (!supabaseUrl || !supabaseAnonKey) {
-      throw new Error('Missing Supabase config. Set it in extension options.');
+      throw new Error('Missing Supabase config. Update SUPABASE_URL and SUPABASE_ANON_KEY in contentScript.js.');
     }
 
     const endpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/comments`;
@@ -242,7 +364,53 @@
     return response.json();
   }
 
+  async function postReply(listingKey, commentId, username, body) {
+    const { supabaseUrl, supabaseAnonKey } = await getSupabaseConfig();
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error('Missing Supabase config. Update SUPABASE_URL and SUPABASE_ANON_KEY in contentScript.js.');
+    }
+
+    const endpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/comment_replies`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${supabaseAnonKey}`
+      },
+      body: JSON.stringify([
+        {
+          listing_key: listingKey,
+          comment_id: commentId,
+          username: username || null,
+          body
+        }
+      ])
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Reply failed (${response.status}): ${text}`);
+    }
+
+    return response.json();
+  }
+
   function registerFormHandler(listingKey) {
+    widget.sortButton.addEventListener('click', async () => {
+      commentSort = commentSort === 'recent' ? 'old' : 'recent';
+      const isRecent = commentSort === 'recent';
+      widget.sortButton.dataset.state = commentSort;
+      widget.sortButton.setAttribute('aria-label', isRecent ? 'Sort by most recent' : 'Sort by oldest');
+      widget.sortButton.title = isRecent ? 'Sort by most recent' : 'Sort by oldest';
+      const label = widget.sortButton.querySelector('.centris-comments__sr-only');
+      if (label) {
+        label.textContent = isRecent ? 'Sort: Recent' : 'Sort: Old';
+      }
+      await loadComments(listingKey);
+    });
+
     widget.form.addEventListener('submit', async (event) => {
       event.preventDefault();
 
@@ -280,6 +448,67 @@
         widget.submitButton.disabled = false;
       }
     });
+
+    widget.container.addEventListener('click', (event) => {
+      const button = event.target.closest('.centris-comments__reply-toggle');
+      if (!button) {
+        return;
+      }
+
+      const item = button.closest('.centris-comments__item');
+      const form = item?.querySelector('.centris-comments__reply-form');
+      if (!form) {
+        return;
+      }
+
+      form.hidden = !form.hidden;
+      button.textContent = form.hidden ? 'Reply' : 'Cancel';
+    });
+
+    widget.container.addEventListener('submit', async (event) => {
+      const form = event.target.closest('.centris-comments__reply-form');
+      if (!form) {
+        return;
+      }
+
+      event.preventDefault();
+
+      const commentId = form.dataset.commentId;
+      const username = form.querySelector('input[name="username"]').value.trim();
+      const body = form.querySelector('textarea[name="body"]').value.trim();
+
+      const validationError = validateInput(username, body);
+      if (validationError) {
+        widget.status.textContent = validationError;
+        return;
+      }
+
+      const rateKey = `centris-last-reply-${commentId}`;
+      const now = Date.now();
+      const stored = await storageGet([rateKey]);
+      const lastPost = stored[rateKey] || 0;
+      if (now - lastPost < 10_000) {
+        widget.status.textContent = 'Please wait at least 10 seconds between replies.';
+        return;
+      }
+
+      const submitButton = form.querySelector('button[type="submit"]');
+      submitButton.disabled = true;
+      widget.status.textContent = 'Posting reply...';
+
+      try {
+        await postReply(listingKey, commentId, username, body);
+        await storageSet({ [rateKey]: now });
+        form.querySelector('textarea[name="body"]').value = '';
+        widget.status.textContent = 'Reply posted.';
+        await loadComments(listingKey);
+      } catch (error) {
+        widget.status.textContent = error.message || 'Error posting reply.';
+        console.error('Centris Comments: reply failed.', error);
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
   }
 
   async function mountWidget(listingKey) {
@@ -288,7 +517,12 @@
     }
 
     widget = buildWidget();
-    findInsertionPoint().appendChild(widget.container);
+    const insertionPoint = findInsertionPoint();
+    if (insertionPoint?.id === 'maindiv' && insertionPoint.parentNode) {
+      insertionPoint.insertAdjacentElement('afterend', widget.container);
+    } else {
+      insertionPoint.appendChild(widget.container);
+    }
     registerFormHandler(listingKey);
     await loadComments(listingKey);
   }
