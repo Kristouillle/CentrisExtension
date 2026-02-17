@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Centris Comments (POC)",
+  "version": "0.1.0",
+  "description": "Injects a comments widget on Centris listing pages using Supabase.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "*://www.centris.ca/*",
+    "*://centris.ca/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://www.centris.ca/*",
+        "*://centris.ca/*"
+      ],
+      "js": ["contentScript.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}

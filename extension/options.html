@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Centris Comments Options</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; max-width: 720px; }
+      form { display: grid; gap: 12px; }
+      label { font-weight: 700; font-size: 14px; }
+      input { width: 100%; box-sizing: border-box; padding: 8px; }
+      button { width: fit-content; padding: 8px 14px; }
+      #status { min-height: 24px; color: #444; }
+      code { background: #f4f5f7; padding: 2px 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Centris Comments Configuration</h1>
+    <p>Set your Supabase project URL and anon key. These are stored locally in <code>chrome.storage.local</code>.</p>
+
+    <form id="options-form">
+      <div>
+        <label for="supabase-url">Supabase URL</label>
+        <input id="supabase-url" type="url" placeholder="https://YOUR_PROJECT.supabase.co" required />
+      </div>
+      <div>
+        <label for="supabase-anon-key">Supabase anon key</label>
+        <input id="supabase-anon-key" type="text" required />
+      </div>
+      <button type="submit">Save</button>
+    </form>
+
+    <p id="status" aria-live="polite"></p>
+
+    <script src="options.js"></script>
+  </body>
+</html>
