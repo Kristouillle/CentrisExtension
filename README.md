@@ -1,87 +1,87 @@
-# Centris Comments Extension (POC)
+# Centris Comments
 
-A Chrome Extension (Manifest V3) that injects a comments widget on Centris listing pages and stores comments in Supabase.
+Centris Comments is a Chrome extension that adds a public comments widget to Centris listing pages. It lets users read existing comments for a listing, post a new comment, and reply to existing comments.
 
-## Project Structure
+## What It Does
 
-- `extension/manifest.json` — MV3 config, content script registration, and options page.
-- `extension/contentScript.js` — listing detection, widget injection, comment fetching/posting.
-- `extension/styles.css` — widget styling.
-- `extension/options.html` + `extension/options.js` — UI to store Supabase URL + anon key in `chrome.storage.local`.
-- `supabase/schema.sql` — table, constraints, indexes, RLS, and policies.
+- Runs only on `centris.ca` and `www.centris.ca` listing pages.
+- Detects the numeric listing ID from the current page URL.
+- Builds a per-listing key in the format `centris:<listing-id>`.
+- Injects a comments UI into the page after the main Centris content.
+- Loads comments and replies from a Supabase REST API.
+- Lets users submit:
+  - an optional username
+  - a comment body
+  - replies to existing comments
+- Supports sorting comments by newest or oldest.
 
-## 1) Supabase Setup
+## How It Works
 
-1. Create a Supabase project.
-2. Open the SQL Editor.
-3. Run all SQL from `supabase/schema.sql`.
-4. In Supabase Project Settings → API, copy:
-   - Project URL
-   - `anon` public key
+The extension is a Manifest V3 content-script extension.
 
-### What the SQL creates
+- [`extension/manifest.json`](./extension/manifest.json) registers the extension on Centris domains only.
+- [`extension/contentScript.js`](./extension/contentScript.js) handles page detection, widget rendering, API calls, validation, and reply flows.
+- [`extension/styles.css`](./extension/styles.css) styles the injected widget.
 
-- `public.comments` table with:
-  - `id` UUID PK
-  - `listing_key` text
-  - `username` nullable text
-  - `body` text
-  - `created_at` timestamptz
-  - `is_deleted` boolean
-- Constraints:
-  - `listing_key`: 1..64 chars
-  - `body`: 1..1000 chars
-  - `username`: <=32 chars or null
-- Index:
-  - `(listing_key, created_at desc)`
-- RLS enabled with policies:
-  - public can `SELECT` where `is_deleted=false`
-  - public can `INSERT` with shape constraints
+On each supported page load, the content script:
 
-## 2) Load the Extension (Developer Mode)
+1. Reads the current URL.
+2. Extracts the last path segment if it is numeric.
+3. Converts it into a listing key such as `centris:14860570`.
+4. Fetches comments and replies for that listing from Supabase.
+5. Renders the widget directly into the page.
 
-1. Open Chrome and go to `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select the `extension/` folder from this repo.
+When a user submits a comment or reply, the extension sends the listing key, optional username, and message body to the external database through HTTPS requests to Supabase.
 
-## 3) Configure Supabase Credentials
+## Permissions And Access
 
-1. In `chrome://extensions`, find **Centris Comments (POC)**.
-2. Click **Details** → **Extension options**.
-3. Enter:
-   - Supabase URL (`https://<project-ref>.supabase.co`)
-   - Supabase anon key
-4. Click **Save**.
+The extension currently requests host access only for:
 
-## 4) Test on Centris Listing Pages
+- `*://www.centris.ca/*`
+- `*://centris.ca/*`
 
-1. Open any Centris listing URL ending in a numeric ID (for example):
-   - `https://www.centris.ca/en/condos-apartments~for-rent~montreal-villeray-saint-michel-parc-extension/14860570`
-2. Scroll toward the bottom/main area and find the **Comments** widget.
-3. Add optional username + comment and click **Post**.
-4. Reload the page and verify the comment remains.
+This access is used only to:
 
-## Listing Key Format
+- detect the current Centris listing
+- inject the widget into the page
+- associate comments with the listing being viewed
 
-The extension parses the URL pathname, takes the last path segment, and if it is numeric creates:
+The extension does not use the Chrome `storage` permission.
 
-- `listing_key = "centris:<ID>"`
+## Data Behavior
 
-Example: `.../14860570` → `centris:14860570`
+The extension sends the following user-provided or page-derived values to Supabase:
 
-## Anti-abuse (POC)
+- listing key derived from the current Centris listing URL
+- optional username provided in the form
+- comment or reply text provided in the form
 
-- Client-side best-effort cooldown: one post per listing every 10 seconds per browser install.
-- Input validation before POST:
-  - username max 32 chars
-  - comment body 1..1000 chars
-- DB constraints + RLS enforce limits server-side.
+The extension does not:
+
+- require user accounts
+- verify usernames against real identities
+- collect payment, health, or authentication data
+- run remote JavaScript or remote Wasm code
+- track clicks, scrolling, or typing outside the comment form
+
+## Constraints And Safeguards
+
+- Username is optional.
+- Username is limited to 32 characters.
+- Comment and reply bodies are limited to 1000 characters.
+- A best-effort in-memory cooldown prevents repeated posting within 10 seconds for the current tab session.
+
+## What It Does Not Do
+
+- It does not authenticate users.
+- It does not guarantee that usernames are real.
+- It does not provide moderation tooling.
+- It does not provide real-time updates.
+- It does not work on non-Centris websites.
+- It does not persist local extension settings in Chrome storage.
 
 ## Known Limitations
 
-- No user accounts/authentication.
-- Any user with anon key can post (within constraints).
-- No robust spam prevention or moderation tools in this POC.
-- UI injection selector may break if Centris changes DOM structure.
-- No real-time updates; data refreshes on load and after posting.
+- The widget injection depends on the current Centris page structure and may break if the site markup changes.
+- Because there is no account system, identity and abuse controls are limited.
+- Comments are tied to listing IDs parsed from the URL, so unsupported or changed URL formats will not load the widget.
