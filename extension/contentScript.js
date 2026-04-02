@@ -1,6 +1,5 @@
 (() => {
   const WIDGET_ID = 'centris-comments-widget';
-  const INSTALL_ID_KEY = 'centrisInstallId';
   const MAX_USERNAME = 32;
   const MAX_BODY = 1000;
   const PAGE_SIZE = 50;
@@ -10,6 +9,7 @@
   let currentListingKey = null;
   let widget = null;
   let commentSort = 'recent';
+  const cooldowns = new Map();
 
   function getLastPathSegment(pathname) {
     const cleanPath = pathname.replace(/\/+$/, '');
@@ -31,26 +31,12 @@
     }
   }
 
-  function storageGet(keys) {
-    return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
+  function getCooldown(key) {
+    return cooldowns.get(key) || 0;
   }
 
-  function storageSet(values) {
-    return new Promise((resolve) => chrome.storage.local.set(values, resolve));
-  }
-
-  function getOrCreateInstallId() {
-    return storageGet([INSTALL_ID_KEY]).then((result) => {
-      if (result[INSTALL_ID_KEY]) {
-        return result[INSTALL_ID_KEY];
-      }
-
-      const installId = (typeof crypto?.randomUUID === 'function')
-        ? crypto.randomUUID()
-        : `fallback-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-      return storageSet({ [INSTALL_ID_KEY]: installId }).then(() => installId);
-    });
+  function setCooldown(key, value) {
+    cooldowns.set(key, value);
   }
 
   function createTextElement(tag, className, text) {
@@ -425,8 +411,7 @@
 
       const rateKey = `centris-last-post-${listingKey}`;
       const now = Date.now();
-      const stored = await storageGet([rateKey]);
-      const lastPost = stored[rateKey] || 0;
+      const lastPost = getCooldown(rateKey);
       if (now - lastPost < 10_000) {
         widget.status.textContent = 'Please wait at least 10 seconds between posts.';
         return;
@@ -437,7 +422,7 @@
 
       try {
         await postComment(listingKey, username, body);
-        await storageSet({ [rateKey]: now });
+        setCooldown(rateKey, now);
         widget.commentInput.value = '';
         widget.status.textContent = 'Posted.';
         await loadComments(listingKey);
@@ -485,8 +470,7 @@
 
       const rateKey = `centris-last-reply-${commentId}`;
       const now = Date.now();
-      const stored = await storageGet([rateKey]);
-      const lastPost = stored[rateKey] || 0;
+      const lastPost = getCooldown(rateKey);
       if (now - lastPost < 10_000) {
         widget.status.textContent = 'Please wait at least 10 seconds between replies.';
         return;
@@ -498,7 +482,7 @@
 
       try {
         await postReply(listingKey, commentId, username, body);
-        await storageSet({ [rateKey]: now });
+        setCooldown(rateKey, now);
         form.querySelector('textarea[name="body"]').value = '';
         widget.status.textContent = 'Reply posted.';
         await loadComments(listingKey);
@@ -548,7 +532,6 @@
   }
 
   async function init() {
-    await getOrCreateInstallId();
     await refreshForCurrentUrl();
 
     let previousHref = location.href;
