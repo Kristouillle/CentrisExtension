@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Centris Comments (POC)",
+  "name": "Centris Comments",
   "version": "0.1.0",
   "description": "Injects a comments widget on Centris listing pages using Supabase.",
   "permissions": ["storage"],
